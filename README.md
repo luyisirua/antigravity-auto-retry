@@ -138,6 +138,11 @@ The extension activates automatically. Click the **🚀 AGQ** icon in the sideba
 
 ## 📝 Changelog
 
+### v1.2.5
+- **Fixed:** Resolved language server process detection failure on Windows for modern Antigravity IDE (supports `language_server.exe` alongside `language_server_windows_x64.exe`).
+- **Fixed:** Resolved quota monitor showing "Cannot connect to Antigravity" on Windows.
+- **Improved:** Included unpacked extension source in the repository for transparent inspection and community contribution.
+
 ### v1.2.4
 - **Fixed:** Resolved several compatibility issues on Windows
 
