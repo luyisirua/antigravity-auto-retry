@@ -322,9 +322,12 @@ class SidebarProvider {
     }
 
     .auto-retry-section {
-      margin-top: 16px;
-      padding-top: 12px;
-      border-top: 1px solid var(--vscode-widget-border);
+      margin-top: 12px;
+      margin-bottom: 16px;
+      padding: 10px;
+      background: var(--vscode-sideBar-background, rgba(255,255,255,0.03));
+      border: 1px solid var(--vscode-widget-border);
+      border-radius: 6px;
     }
 
     .auto-retry-row {
@@ -466,17 +469,6 @@ class SidebarProvider {
     <div class="user-plan">Plan: ${this.escapeHtml(data.user.plan)}</div>
   </div>
   
-  <div class="section-title">Model Quotas</div>
-  
-  ${modelsHtml}
-  
-  <div class="footer">
-    <span class="last-update">Updated: ${data.fetchedAt.toLocaleTimeString()}</span>
-    <button class="refresh-btn" onclick="refresh()">
-      ↻ Refresh
-    </button>
-  </div>
-
   <div class="auto-retry-section">
     <div class="debug-status">
       <span class="debug-dot ${this._debugModeActive ? "active" : "inactive"}"></span>
@@ -501,6 +493,19 @@ class SidebarProvider {
       ${!this._debugModeActive ? "Enable Debug Mode to use Auto Retry" : this._autoRetryError ? this._autoRetryError : this._autoRetryEnabled ? "Active — auto-clicking retry buttons" : "Disabled"}
     </div>
   </div>
+
+  <div class="section-title">Model Quotas</div>
+  
+  ${modelsHtml}
+  
+  <div class="footer">
+    <span class="last-update">Updated: ${data.fetchedAt.toLocaleTimeString()}</span>
+    <button class="refresh-btn" onclick="refresh()">
+      ↻ Refresh
+    </button>
+  </div>
+
+
   
   <script>
     const vscode = acquireVsCodeApi();

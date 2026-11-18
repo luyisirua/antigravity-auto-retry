@@ -1,80 +1,85 @@
-{
-  "name": "simple-agq",
-  "displayName": "Simple AGQ - Antigravity Quota",
-  "description": "Xem quota các AI models trong Antigravity IDE",
-  "version": "1.2.5",
-  "publisher": "local",
-  "engines": {
-    "vscode": "^1.85.0"
-  },
-  "categories": [
-    "Other"
-  ],
-  "activationEvents": [
-    "onStartupFinished"
-  ],
-  "main": "./out/extension.js",
-  "contributes": {
-    "viewsContainers": {
-      "activitybar": [
-        {
-          "id": "agq-sidebar",
-          "title": "AGQ Quota",
-          "icon": "$(rocket)"
-        }
-      ]
-    },
-    "views": {
-      "agq-sidebar": [
-        {
-          "type": "webview",
-          "id": "agq.quotaView",
-          "name": "Model Quotas"
-        }
-      ]
-    },
-    "commands": [
-      {
-        "command": "simpleAgq.refresh",
-        "title": "AGQ: Refresh Quota",
-        "icon": "$(refresh)"
-      },
-      {
-        "command": "simpleAgq.showQuota",
-        "title": "AGQ: Show Quota Details"
-      }
-    ],
-    "configuration": {
-      "title": "Simple AGQ",
-      "properties": {
-        "simpleAgq.autoRefreshInterval": {
-          "type": "number",
-          "default": 120,
-          "minimum": 30,
-          "description": "Auto refresh interval in seconds (minimum 30s)"
-        },
-        "simpleAgq.showInStatusBar": {
-          "type": "boolean",
-          "default": true,
-          "description": "Show quota in status bar"
-        },
-        "simpleAgq.autoRetryEnabled": {
-          "type": "boolean",
-          "default": false,
-          "description": "Automatically retry when Antigravity agent encounters errors"
-        }
-      }
-    }
-  },
-  "scripts": {
-    "compile": "tsc -p ./",
-    "watch": "tsc -watch -p ./",
-    "package": "vsce package --no-dependencies"
-  },
-  "devDependencies": {
-    "@types/node": "^20.0.0",
-    "@types/vscode": "^1.85.0",
-    "@vscode/vsce": "3.0.0",
-    "typescript": "^5.3.0"
-  }
+﻿{
+    "name":  "simple-agq",
+    "displayName":  "Simple AGQ - Antigravity Quota",
+    "description":  "Xem quota c谩c AI models trong Antigravity IDE",
+    "version":  "1.2.4",
+    "publisher":  "local",
+    "engines":  {
+                    "vscode":  "^1.85.0"
+                },
+    "categories":  [
+                       "Other"
+                   ],
+    "activationEvents":  [
+                             "onStartupFinished"
+                         ],
+    "main":  "./out/extension.js",
+    "contributes":  {
+                        "viewsContainers":  {
+                                                "activitybar":  [
+                                                                    {
+                                                                        "id":  "agq-sidebar",
+                                                                        "title":  "AGQ Quota",
+                                                                        "icon":  "$(rocket)"
+                                                                    }
+                                                                ]
+                                            },
+                        "views":  {
+                                      "agq-sidebar":  [
+                                                          {
+                                                              "type":  "webview",
+                                                              "id":  "agq.quotaView",
+                                                              "name":  "Model Quotas"
+                                                          }
+                                                      ]
+                                  },
+                        "commands":  [
+                                         {
+                                             "command":  "simpleAgq.refresh",
+                                             "title":  "AGQ: Refresh Quota",
+                                             "icon":  "$(refresh)"
+                                         },
+                                         {
+                                             "command":  "simpleAgq.showQuota",
+                                             "title":  "AGQ: Show Quota Details"
+                                         },
+                                         {
+                                             "command":  "simpleAgq.toggleAutoRetry",
+                                             "title":  "AGQ: Toggle Auto Retry",
+                                             "icon":  "$(sync)"
+                                         }
+                                     ],
+                        "configuration":  {
+                                              "title":  "Simple AGQ",
+                                              "properties":  {
+                                                                 "simpleAgq.autoRefreshInterval":  {
+                                                                                                       "type":  "number",
+                                                                                                       "default":  120,
+                                                                                                       "minimum":  30,
+                                                                                                       "description":  "Auto refresh interval in seconds (minimum 30s)"
+                                                                                                   },
+                                                                 "simpleAgq.showInStatusBar":  {
+                                                                                                   "type":  "boolean",
+                                                                                                   "default":  true,
+                                                                                                   "description":  "Show quota in status bar"
+                                                                                               },
+                                                                 "simpleAgq.autoRetryEnabled":  {
+                                                                                                    "type":  "boolean",
+                                                                                                    "default":  false,
+                                                                                                    "description":  "Automatically retry when Antigravity agent encounters errors"
+                                                                                                }
+                                                             }
+                                          }
+                    },
+    "scripts":  {
+                    "compile":  "tsc -p ./",
+                    "watch":  "tsc -watch -p ./",
+                    "package":  "vsce package --no-dependencies"
+                },
+    "devDependencies":  {
+                            "@types/node":  "^20.0.0",
+                            "@types/vscode":  "^1.85.0",
+                            "@vscode/vsce":  "3.0.0",
+                            "typescript":  "^5.3.0"
+                        }
 }

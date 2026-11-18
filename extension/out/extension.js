@@ -44,20 +44,48 @@ const quota_service_1 = require("./quota_service");
 const sidebar_provider_1 = require("./sidebar_provider");
 const auto_retry_service_1 = require("./auto_retry_service");
 let statusBarItem;
+let autoRetryStatusBarItem;
 let quotaService;
 let sidebarProvider;
 let autoRetryService;
 let refreshTimer;
 let lastQuotaData = null;
+
+function updateAutoRetryStatusBar(running, error) {
+    if (!autoRetryStatusBarItem) return;
+    if (running) {
+        autoRetryStatusBarItem.text = "$(sync~spin) Retry: ON";
+        autoRetryStatusBarItem.tooltip = "Auto Retry is ACTIVE (auto-clicking retry buttons). Click to turn OFF.";
+        autoRetryStatusBarItem.backgroundColor = undefined;
+    } else if (error) {
+        autoRetryStatusBarItem.text = "$(warning) Retry: ERR";
+        autoRetryStatusBarItem.tooltip = `Auto Retry Error: ${error}. Click to check.`;
+        autoRetryStatusBarItem.backgroundColor = new vscode.ThemeColor("statusBarItem.warningBackground");
+    } else {
+        autoRetryStatusBarItem.text = "$(circle-slash) Retry: OFF";
+        autoRetryStatusBarItem.tooltip = "Auto Retry is DISABLED. Click to turn ON.";
+        autoRetryStatusBarItem.backgroundColor = undefined;
+    }
+}
+
 async function activate(context) {
     quotaService = new quota_service_1.QuotaService();
     sidebarProvider = new sidebar_provider_1.SidebarProvider(context.extensionUri);
+    
+    autoRetryStatusBarItem = vscode.window.createStatusBarItem(vscode.StatusBarAlignment.Right, 99);
+    autoRetryStatusBarItem.command = "simpleAgq.toggleAutoRetry";
+    updateAutoRetryStatusBar(false);
+    autoRetryStatusBarItem.show();
+    context.subscriptions.push(autoRetryStatusBarItem);
+
     autoRetryService = new auto_retry_service_1.AutoRetryService((running, error, shouldDisableConfig) => {
         sidebarProvider.updateAutoRetryState(running, error);
+        updateAutoRetryStatusBar(running, error);
         if (shouldDisableConfig) {
             vscode.workspace.getConfiguration("simpleAgq").update("autoRetryEnabled", false, true);
         }
     });
+
     sidebarProvider.setAutoRetryToggleHandler(async (enabled) => {
         const config = vscode.workspace.getConfiguration("simpleAgq");
         await config.update("autoRetryEnabled", enabled, true);
@@ -70,23 +98,51 @@ async function activate(context) {
         else {
             await autoRetryService.stop();
         }
+        updateAutoRetryStatusBar(autoRetryService.isRunning);
     });
+
     sidebarProvider.setRestartWithDebugHandler(() => {
         restartIdeWithDebugMode();
     });
+
+    context.subscriptions.push(vscode.commands.registerCommand("simpleAgq.toggleAutoRetry", async () => {
+        const config = vscode.workspace.getConfiguration("simpleAgq");
+        const current = config.get("autoRetryEnabled", false);
+        const target = !current;
+        await config.update("autoRetryEnabled", target, true);
+        if (target) {
+            const started = await autoRetryService.start();
+            if (started) {
+                vscode.window.showInformationMessage("Auto Retry: 已开启 (Active)");
+            } else {
+                await config.update("autoRetryEnabled", false, true);
+                vscode.window.showErrorMessage("Auto Retry: 启动失败，请检查是否带 --remote-debugging-port=9222 启动");
+            }
+        } else {
+            await autoRetryService.stop();
+            vscode.window.showInformationMessage("Auto Retry: 已关闭 (Disabled)");
+        }
+        sidebarProvider.updateAutoRetryState(autoRetryService.isRunning);
+        updateAutoRetryStatusBar(autoRetryService.isRunning);
+    }));
+
     context.subscriptions.push(vscode.window.registerWebviewViewProvider(sidebar_provider_1.SidebarProvider.viewType, sidebarProvider));
+    
     statusBarItem = vscode.window.createStatusBarItem(vscode.StatusBarAlignment.Right, 100);
     statusBarItem.command = "simpleAgq.showQuota";
     statusBarItem.text = "$(rocket) AGQ";
     statusBarItem.tooltip = "Click to view Antigravity Quota";
     statusBarItem.show();
     context.subscriptions.push(statusBarItem);
+    
     context.subscriptions.push(vscode.commands.registerCommand("simpleAgq.refresh", () => refreshQuota()), vscode.commands.registerCommand("simpleAgq.showQuota", () => {
         vscode.commands.executeCommand("agq-sidebar.focus");
     }));
+    
     const config = vscode.workspace.getConfiguration("simpleAgq");
     const interval = Math.max(30, config.get("autoRefreshInterval", 120));
     startAutoRefresh(interval);
+    
     context.subscriptions.push(vscode.workspace.onDidChangeConfiguration((e) => {
         if (e.affectsConfiguration("simpleAgq.autoRefreshInterval")) {
             const newConfig = vscode.workspace.getConfiguration("simpleAgq");
@@ -94,9 +150,11 @@ async function activate(context) {
             startAutoRefresh(newInterval);
         }
     }));
+    
     refreshQuota();
     checkDebugModeAndRestore(config);
 }
+
 async function checkDebugModeAndRestore(config) {
     const debugPort = await autoRetryService.checkDebugPortAvailable();
     const isDebugActive = debugPort !== null;
@@ -104,9 +162,12 @@ async function checkDebugModeAndRestore(config) {
     if (isDebugActive) {
         const autoRetryEnabled = config.get("autoRetryEnabled", false);
         if (autoRetryEnabled) {
-            autoRetryService.start();
+            await autoRetryService.start();
         }
-        sidebarProvider.updateAutoRetryState(autoRetryEnabled);
+        sidebarProvider.updateAutoRetryState(autoRetryService.isRunning);
+        updateAutoRetryStatusBar(autoRetryService.isRunning);
+    } else {
+        updateAutoRetryStatusBar(false);
     }
 }
 function restartIdeWithDebugMode() {
