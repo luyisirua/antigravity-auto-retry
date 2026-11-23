@@ -1,64 +1,90 @@
-﻿# Antigravity 2.0 Auto-Retry (Windows UI Automation + System Tray)
+﻿# Antigravity 2.0 Auto-Retry (UIA + Windows Built-in OCR Visual Dual-Engine)
 Add-Type -AssemblyName System.Windows.Forms
 Add-Type -AssemblyName System.Drawing
 Add-Type -AssemblyName UIAutomationClient
 Add-Type -AssemblyName UIAutomationTypes
+Add-Type -AssemblyName System.Runtime.WindowsRuntime
 
 Add-Type @"
 using System;
 using System.Runtime.InteropServices;
 
 public class Win32Helper {
+    [StructLayout(LayoutKind.Sequential)]
+    public struct RECT {
+        public int Left;
+        public int Top;
+        public int Right;
+        public int Bottom;
+    }
+
+    [StructLayout(LayoutKind.Sequential)]
+    public struct POINT {
+        public int X;
+        public int Y;
+    }
+
+    [DllImport("user32.dll")]
+    public static extern bool SetProcessDPIAware();
+
     [DllImport("user32.dll")]
     public static extern bool IsIconic(IntPtr hWnd);
 
     [DllImport("user32.dll")]
-    public static extern bool DestroyIcon(IntPtr handle);
+    public static extern bool IsWindowVisible(IntPtr hWnd);
 
-    [DllImport("user32.dll", CharSet = CharSet.Auto)]
-    public static extern IntPtr SendMessageTimeout(
-        IntPtr hWnd, uint Msg, IntPtr wParam, IntPtr lParam,
-        uint fuFlags, uint uTimeout, out IntPtr lpdwResult);
+    [DllImport("user32.dll")]
+    public static extern bool GetWindowRect(IntPtr hWnd, out RECT lpRect);
+
+    [DllImport("user32.dll")]
+    public static extern bool GetCursorPos(out POINT lpPoint);
+
+    [DllImport("user32.dll")]
+    public static extern bool SetCursorPos(int X, int Y);
+
+    [DllImport("user32.dll")]
+    public static extern void mouse_event(uint dwFlags, int dx, int dy, uint dwData, UIntPtr dwExtraInfo);
+
+    [DllImport("user32.dll")]
+    public static extern bool DestroyIcon(IntPtr handle);
 }
 "@
+
+[Win32Helper]::SetProcessDPIAware() | Out-Null
+
+# WinRT Async Helper for Windows.Media.Ocr
+$asTaskGeneric = ([System.WindowsRuntimeSystemExtensions].GetMethods() | Where-Object {
+    $_.Name -eq 'AsTask' -and $_.GetParameters().Count -eq 1 -and $_.GetParameters()[0].ParameterType.Name -eq 'IAsyncOperation`1'
+})[0]
+
+function Await-WinRt {
+    param($WinRtTask, [Type]$ResultType)
+    $asTask = $asTaskGeneric.MakeGenericMethod($ResultType)
+    $netTask = $asTask.Invoke($null, @($WinRtTask))
+    $netTask.Wait(-1) | Out-Null
+    return $netTask.Result
+}
+
+[Windows.Media.Ocr.OcrEngine, Windows.Foundation, ContentType=WindowsRuntime] | Out-Null
+[Windows.Graphics.Imaging.BitmapDecoder, Windows.Foundation, ContentType=WindowsRuntime] | Out-Null
+[Windows.Storage.Streams.InMemoryRandomAccessStream, Windows.Foundation, ContentType=WindowsRuntime] | Out-Null
+
+$script:ocrEngine = [Windows.Media.Ocr.OcrEngine]::TryCreateFromUserProfileLanguages()
 
 # Configuration
 $TargetLabels = @("retry", "try again", "resume", "try again…", "retry…", "重试", "再试一次")
 $ScanIntervalMs = 3000
-$CooldownMs = 5000
+$CooldownMs = 6000
 $LogFile = "C:\Users\KT\Documents\antigravity-auto-retry\retry.log"
 
 $script:enabled = $true
 $script:retryCount = 0
 $script:lastClickTime = [DateTime]::MinValue
-$script:lastBtnCount = -1
 
 function Write-Log {
     param([string]$Message)
     $ts = Get-Date -Format "yyyy-MM-dd HH:mm:ss"
     Add-Content -Path $LogFile -Value "[$ts] $Message" -Encoding UTF8
-}
-
-function Wake-ChromiumAccessibility {
-    param([System.Windows.Automation.AutomationElement]$WinElem)
-    try {
-        # Send WM_GETOBJECT (0x003D) with OBJID_CLIENT (-4) to wake lazy Chromium a11y
-        $hwnd = [IntPtr]$WinElem.Current.NativeWindowHandle
-        if ($hwnd -ne [IntPtr]::Zero) {
-            [IntPtr]$res = [IntPtr]::Zero
-            [Win32Helper]::SendMessageTimeout($hwnd, 0x003D, [IntPtr]::Zero, [IntPtr](-4), 2, 200, [ref]$res) | Out-Null
-        }
-        $children = $WinElem.FindAll([System.Windows.Automation.TreeScope]::Descendants, [System.Windows.Automation.Condition]::TrueCondition)
-        foreach ($c in $children) {
-            if ($c.Current.ClassName -eq "Chrome_RenderWidgetHostHWND") {
-                $ch = [IntPtr]$c.Current.NativeWindowHandle
-                if ($ch -ne [IntPtr]::Zero) {
-                    [IntPtr]$res2 = [IntPtr]::Zero
-                    [Win32Helper]::SendMessageTimeout($ch, 0x003D, [IntPtr]::Zero, [IntPtr](-4), 2, 200, [ref]$res2) | Out-Null
-                }
-            }
-        }
-    } catch {}
 }
 
 function New-CircleIcon {
@@ -99,14 +125,14 @@ $menuStatus = New-Object System.Windows.Forms.ToolStripMenuItem
 $menuStatus.Enabled = $false
 
 $menuToggle = New-Object System.Windows.Forms.ToolStripMenuItem
-$menuDiag = New-Object System.Windows.Forms.ToolStripMenuItem("诊断控件识别 (测试)")
+$menuDiagOcr = New-Object System.Windows.Forms.ToolStripMenuItem("测试视觉识别 (OCR)")
 $menuLog = New-Object System.Windows.Forms.ToolStripMenuItem("打开运行日志")
 $menuExit = New-Object System.Windows.Forms.ToolStripMenuItem("退出")
 
 $contextMenu.Items.Add($menuStatus) | Out-Null
 $contextMenu.Items.Add((New-Object System.Windows.Forms.ToolStripSeparator)) | Out-Null
 $contextMenu.Items.Add($menuToggle) | Out-Null
-$contextMenu.Items.Add($menuDiag) | Out-Null
+$contextMenu.Items.Add($menuDiagOcr) | Out-Null
 $contextMenu.Items.Add($menuLog) | Out-Null
 $contextMenu.Items.Add((New-Object System.Windows.Forms.ToolStripSeparator)) | Out-Null
 $contextMenu.Items.Add($menuExit) | Out-Null
@@ -149,7 +175,7 @@ $menuLog.Add_Click({
     }
 })
 
-function Get-AntigravityWindows {
+function Get-AntigravityWindowHandles {
     $agPids = @(Get-Process -Name "Antigravity" -ErrorAction SilentlyContinue | Select-Object -ExpandProperty Id)
     if ($agPids.Count -eq 0) { return @() }
 
@@ -158,50 +184,165 @@ function Get-AntigravityWindows {
     $result = @()
     foreach ($w in $wins) {
         if ($w.Current.ProcessId -in $agPids -and $w.Current.Name) {
-            $result += $w
+            $hwnd = [IntPtr]$w.Current.NativeWindowHandle
+            if ($hwnd -ne [IntPtr]::Zero -and [Win32Helper]::IsWindowVisible($hwnd) -and -not [Win32Helper]::IsIconic($hwnd)) {
+                $result += [PSCustomObject]@{
+                    Handle = $hwnd
+                    Title  = $w.Current.Name
+                    Elem   = $w
+                }
+            }
         }
     }
     return $result
 }
 
+function Is-BlueButtonPixel {
+    param([System.Drawing.Bitmap]$Bmp, [double]$X, [double]$Y, [double]$W, [double]$H)
+    $cy = [int]($Y + $H / 2)
+    $points = @(
+        @([Math]::Max(0, [int]($X - 5)), $cy),
+        @([Math]::Min($Bmp.Width - 1, [int]($X + $W + 5)), $cy),
+        @([int]($X + $W / 2), [Math]::Max(0, [int]($Y - 3)))
+    )
+    foreach ($pt in $points) {
+        if ($pt[0] -ge 0 -and $pt[0] -lt $Bmp.Width -and $pt[1] -ge 0 -and $pt[1] -lt $Bmp.Height) {
+            $c = $Bmp.GetPixel($pt[0], $pt[1])
+            # Matches blue primary button (e.g. RGB(37,96,163))
+            if ($c.B -gt 120 -and ($c.B - $c.R) -gt 45) {
+                return $true
+            }
+        }
+    }
+    return $false
+}
+
+function Find-RetryByOcr {
+    param([IntPtr]$Hwnd, [switch]$DiagMode)
+    if (-not $script:ocrEngine) { return $null }
+
+    $rect = New-Object Win32Helper+RECT
+    if (-not [Win32Helper]::GetWindowRect($Hwnd, [ref]$rect)) { return $null }
+
+    $winW = $rect.Right - $rect.Left
+    $winH = $rect.Bottom - $rect.Top
+    if ($winW -lt 200 -or $winH -lt 200) { return $null }
+
+    # Capture bottom 45% of the window where error banners appear
+    $scanTop = $rect.Top + [int]($winH * 0.55)
+    $scanH = $rect.Bottom - $scanTop
+    $scanLeft = $rect.Left
+
+    $bmp = New-Object System.Drawing.Bitmap($winW, $scanH)
+    $g = [System.Drawing.Graphics]::FromImage($bmp)
+    $g.CopyFromScreen($scanLeft, $scanTop, 0, 0, $bmp.Size)
+    $g.Dispose()
+
+    $ms = New-Object System.IO.MemoryStream
+    $bmp.Save($ms, [System.Drawing.Imaging.ImageFormat]::Bmp)
+    $bytes = $ms.ToArray()
+    $ms.Dispose()
+
+    $ras = New-Object Windows.Storage.Streams.InMemoryRandomAccessStream
+    $writer = New-Object Windows.Storage.Streams.DataWriter($ras.GetOutputStreamAt(0))
+    $writer.WriteBytes($bytes)
+    Await-WinRt ($writer.StoreAsync()) ([uint32]) | Out-Null
+    $writer.DetachStream() | Out-Null
+    $writer.Dispose()
+
+    $ras.Seek(0)
+    $decoder = Await-WinRt ([Windows.Graphics.Imaging.BitmapDecoder]::CreateAsync($ras)) ([Windows.Graphics.Imaging.BitmapDecoder])
+    $softBmp = Await-WinRt ($decoder.GetSoftwareBitmapAsync()) ([Windows.Graphics.Imaging.SoftwareBitmap])
+
+    $ocrResult = Await-WinRt ($script:ocrEngine.RecognizeAsync($softBmp)) ([Windows.Media.Ocr.OcrResult])
+
+    $found = $null
+    $allLines = @()
+
+    foreach ($line in $ocrResult.Lines) {
+        if ($DiagMode) { $allLines += $line.Text }
+        $words = @($line.Words)
+        for ($i = 0; $i -lt $words.Count; $i++) {
+            $w1 = $words[$i].Text.Trim().ToLowerInvariant()
+            $r1 = $words[$i].BoundingRect
+
+            $matchedLabel = $null
+            $boxX = $r1.X; $boxY = $r1.Y; $boxW = $r1.Width; $boxH = $r1.Height
+
+            if ($w1 -in @("retry", "resume", "重试")) {
+                $matchedLabel = $words[$i].Text
+            } elseif ($w1 -eq "try" -and ($i + 1) -lt $words.Count -and $words[$i + 1].Text.Trim().ToLowerInvariant() -eq "again") {
+                $r2 = $words[$i + 1].BoundingRect
+                $matchedLabel = "Try again"
+                $boxW = ($r2.X + $r2.Width) - $r1.X
+            }
+
+            if ($matchedLabel) {
+                if (Is-BlueButtonPixel -Bmp $bmp -X $boxX -Y $boxY -W $boxW -H $boxH) {
+                    $found = [PSCustomObject]@{
+                        Label   = $matchedLabel
+                        ScreenX = $scanLeft + [int]($boxX + $boxW / 2)
+                        ScreenY = $scanTop + [int]($boxY + $boxH / 2)
+                    }
+                    break
+                }
+            }
+        }
+        if ($found) { break }
+    }
+
+    $softBmp.Dispose()
+    $ras.Dispose()
+    $bmp.Dispose()
+
+    if ($DiagMode) {
+        return [PSCustomObject]@{
+            Found = $found
+            Lines = $allLines
+            WinSize = "${winW}x${winH}"
+        }
+    }
+    return $found
+}
+
+function Invoke-MouseClickAt {
+    param([int]$X, [int]$Y)
+    $origPt = New-Object Win32Helper+POINT
+    [Win32Helper]::GetCursorPos([ref]$origPt) | Out-Null
+
+    [Win32Helper]::SetCursorPos($X, $Y) | Out-Null
+    Start-Sleep -Milliseconds 30
+    [Win32Helper]::mouse_event(0x0002, 0, 0, 0, [UIntPtr]::Zero) # LEFTDOWN
+    Start-Sleep -Milliseconds 30
+    [Win32Helper]::mouse_event(0x0004, 0, 0, 0, [UIntPtr]::Zero) # LEFTUP
+    Start-Sleep -Milliseconds 30
+
+    [Win32Helper]::SetCursorPos($origPt.X, $origPt.Y) | Out-Null
+}
+
 # Diagnostic test
-$menuDiag.Add_Click({
+$menuDiagOcr.Add_Click({
     try {
-        $wins = @(Get-AntigravityWindows)
+        $wins = @(Get-AntigravityWindowHandles)
         if ($wins.Count -eq 0) {
-            [System.Windows.Forms.MessageBox]::Show("未检测到 Antigravity 窗口（请确认客户端已打开且未最小化）。", "UIA 诊断")
+            [System.Windows.Forms.MessageBox]::Show("未检测到可见的 Antigravity 窗口。", "OCR 视觉诊断")
             return
         }
 
-        $targetWin = $wins[0]
-        Wake-ChromiumAccessibility -WinElem $targetWin
-        Start-Sleep -Milliseconds 300
+        $sw = [System.Diagnostics.Stopwatch]::StartNew()
+        $res = Find-RetryByOcr -Hwnd $wins[0].Handle -DiagMode
+        $sw.Stop()
 
-        $allElems = $targetWin.FindAll([System.Windows.Automation.TreeScope]::Descendants, [System.Windows.Automation.Condition]::TrueCondition)
-        $btnCond = New-Object System.Windows.Automation.PropertyCondition(
-            [System.Windows.Automation.AutomationElement]::ControlTypeProperty,
-            [System.Windows.Automation.ControlType]::Button
-        )
-        $btns = $targetWin.FindAll([System.Windows.Automation.TreeScope]::Descendants, $btnCond)
-        $names = @()
-        foreach ($b in $btns) {
-            $n = $b.Current.Name
-            if ($n -and $n.Trim().Length -gt 0) {
-                $names += $n.Trim()
-            }
-        }
-        $sample = ($names | Select-Object -Unique -First 15) -join ", "
-        $msg = "窗口: $($targetWin.Current.Name)`n总控件节点数: $($allElems.Count)`n检测到按钮总数: $($btns.Count)`n部分按钮名称: $sample"
-        Write-Log "Diag: totalNodes=$($allElems.Count), buttons=$($btns.Count), sample=$sample"
-
-        if ($btns.Count -le 5) {
-            $msg += "`n`n⚠️ 依然未能读取到网页内部按钮（总节点数 $($allElems.Count)）。`n说明 Antigravity 2.33.0 底层未暴露网页无障碍树，建议改用【方案二：屏幕图像识别点击】。"
+        $linePreview = ($res.Lines | Select-Object -First 8) -join " | "
+        $msg = "窗口: $($wins[0].Title) ($($res.WinSize))`n识别耗时: $($sw.ElapsedMilliseconds) ms`n底部识别到的文字: $linePreview`n"
+        if ($res.Found) {
+            $msg += "`n✅ 成功锁定蓝色按钮 '$($res.Found.Label)' 坐标: ($($res.Found.ScreenX), $($res.Found.ScreenY))"
         } else {
-            $msg += "`n`n✅ UIA 控件树读取正常，Auto-Retry 可以正常识别按钮！"
+            $msg += "`nℹ️ 当前画面未出现蓝色 Retry 按钮（如已有文字输出说明视觉引擎工作正常）。"
         }
-        [System.Windows.Forms.MessageBox]::Show($msg, "UIA 诊断结果")
+        [System.Windows.Forms.MessageBox]::Show($msg, "OCR 视觉诊断")
     } catch {
-        [System.Windows.Forms.MessageBox]::Show("诊断出错: $($_.Exception.Message)", "UIA 诊断")
+        [System.Windows.Forms.MessageBox]::Show("诊断出错: $($_.Exception.Message)", "OCR 视觉诊断")
     }
 })
 
@@ -222,63 +363,27 @@ $timer.Add_Tick({
     if (($now - $script:lastClickTime).TotalMilliseconds -lt $CooldownMs) { return }
 
     try {
-        $wins = @(Get-AntigravityWindows)
+        $wins = @(Get-AntigravityWindowHandles)
         if ($wins.Count -eq 0) { return }
 
-        $btnCond = New-Object System.Windows.Automation.PropertyCondition(
-            [System.Windows.Automation.AutomationElement]::ControlTypeProperty,
-            [System.Windows.Automation.ControlType]::Button
-        )
-
-        foreach ($winElem in $wins) {
-            $hwnd = [IntPtr]$winElem.Current.NativeWindowHandle
-            if ($hwnd -ne [IntPtr]::Zero -and [Win32Helper]::IsIconic($hwnd)) { continue }
-
-            $btns = $winElem.FindAll([System.Windows.Automation.TreeScope]::Descendants, $btnCond)
-            if ($btns.Count -eq 0) {
-                Wake-ChromiumAccessibility -WinElem $winElem
-                $btns = $winElem.FindAll([System.Windows.Automation.TreeScope]::Descendants, $btnCond)
-            }
-
-            if ($btns.Count -ne $script:lastBtnCount) {
-                $script:lastBtnCount = $btns.Count
-                Write-Log "Window '$($winElem.Current.Name)' buttons detected: $($btns.Count)"
-            }
-
-            foreach ($btn in $btns) {
-                $rawName = $btn.Current.Name
-                if (-not $rawName) { continue }
-                $name = $rawName.Trim().ToLowerInvariant()
-                if ($name.Length -eq 0 -or $name.Length -gt 30) { continue }
-
-                if ($TargetLabels -contains $name) {
-                    if ($btn.Current.IsEnabled -and -not $btn.Current.IsOffscreen) {
-                        $clicked = $false
-                        $patternObj = $null
-                        if ($btn.TryGetCurrentPattern([System.Windows.Automation.InvokePattern]::Pattern, [ref]$patternObj)) {
-                            $patternObj.Invoke()
-                            $clicked = $true
-                        }
-                        if ($clicked) {
-                            $script:lastClickTime = $now
-                            $script:retryCount++
-                            Update-TrayUI
-                            Write-Log "Clicked '$rawName' (total: $($script:retryCount))"
-                            $notifyIcon.ShowBalloonTip(2000, "Antigravity Auto-Retry", "已自动点击 $rawName (第 $($script:retryCount) 次)", [System.Windows.Forms.ToolTipIcon]::Info)
-                            return
-                        } else {
-                            Write-Log "Found '$rawName' but InvokePattern not supported"
-                        }
-                    }
-                }
+        foreach ($w in $wins) {
+            $hit = Find-RetryByOcr -Hwnd $w.Handle
+            if ($hit) {
+                Invoke-MouseClickAt -X $hit.ScreenX -Y $hit.ScreenY
+                $script:lastClickTime = $now
+                $script:retryCount++
+                Update-TrayUI
+                Write-Log "Visual OCR clicked '$($hit.Label)' at ($($hit.ScreenX), $($hit.ScreenY)) (total: $($script:retryCount))"
+                $notifyIcon.ShowBalloonTip(2000, "Antigravity Auto-Retry", "已自动点击 $($hit.Label) (第 $($script:retryCount) 次)", [System.Windows.Forms.ToolTipIcon]::Info)
+                return
             }
         }
     } catch {
-        # Ignore transient UIA errors
+        Write-Log "Scan error: $($_.Exception.Message)"
     }
 })
 
-Write-Log "Auto-Retry started."
+Write-Log "Auto-Retry (Visual OCR Engine) started."
 Update-TrayUI
 $timer.Start()
 [System.Windows.Forms.Application]::Run()
