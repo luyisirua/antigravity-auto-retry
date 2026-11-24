@@ -362,21 +362,23 @@ function Invoke-MouseClickAt {
     $origPt = New-Object Win32Helper+POINT
     [Win32Helper]::GetCursorPos([ref]$origPt) | Out-Null
 
-    # Ensure target Antigravity window is foreground so Electron processes the click
     if ([Win32Helper]::GetForegroundWindow() -ne $Hwnd) {
         [Win32Helper]::SetForegroundWindow($Hwnd) | Out-Null
-        Start-Sleep -Milliseconds 80
+        Start-Sleep -Milliseconds 100
     }
 
-    $mSent = [Win32Helper]::SendMouseMoveAbs($X, $Y)
-    Start-Sleep -Milliseconds 100
+    $mSent = [Win32Helper]::SetCursorPos($X, $Y)
+    Start-Sleep -Milliseconds 120
+    $curPt = New-Object Win32Helper+POINT
+    [Win32Helper]::GetCursorPos([ref]$curPt) | Out-Null
+
     $dSent = [Win32Helper]::SendMouseClickFlag(0x0002) # LEFTDOWN
-    Start-Sleep -Milliseconds 60
+    Start-Sleep -Milliseconds 80
     $uSent = [Win32Helper]::SendMouseClickFlag(0x0004) # LEFTUP
-    Start-Sleep -Milliseconds 60
+    Start-Sleep -Milliseconds 300
 
     [Win32Helper]::SetCursorPos($origPt.X, $origPt.Y) | Out-Null
-    return "move=$mSent,down=$dSent,up=$uSent"
+    return "move=$mSent,down=$dSent,up=$uSent,actual=($($curPt.X),$($curPt.Y))"
 }
 
 # Diagnostic test
@@ -438,7 +440,7 @@ $timer.Add_Tick({
             }
         }
     } catch {
-        Write-Log "Scan error: $($_.Exception.Message)"
+        if ($_.Exception.Message -notmatch "句柄无效|handle is invalid") { Write-Log "Scan error: $($_.Exception.Message)" }
     }
 })
 
