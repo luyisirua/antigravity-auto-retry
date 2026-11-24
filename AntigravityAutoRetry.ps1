@@ -199,22 +199,25 @@ function Get-AntigravityWindowHandles {
 
 function Is-BlueButtonPixel {
     param([System.Drawing.Bitmap]$Bmp, [double]$X, [double]$Y, [double]$W, [double]$H)
+    $cx = [int]($X + $W / 2)
     $cy = [int]($Y + $H / 2)
     $points = @(
         @([Math]::Max(0, [int]($X - 5)), $cy),
         @([Math]::Min($Bmp.Width - 1, [int]($X + $W + 5)), $cy),
-        @([int]($X + $W / 2), [Math]::Max(0, [int]($Y - 3)))
+        @($cx, [Math]::Max(0, [int]($Y - 3))),
+        @($cx, [Math]::Min($Bmp.Height - 1, [int]($Y + $H + 3)))
     )
+    $blueCount = 0
     foreach ($pt in $points) {
         if ($pt[0] -ge 0 -and $pt[0] -lt $Bmp.Width -and $pt[1] -ge 0 -and $pt[1] -lt $Bmp.Height) {
             $c = $Bmp.GetPixel($pt[0], $pt[1])
-            # Matches blue primary button (e.g. RGB(37,96,163))
-            if ($c.B -gt 120 -and ($c.B - $c.R) -gt 45) {
-                return $true
+            # Require solid dark/medium blue (low R excludes white/gray backgrounds & ClearType fringes)
+            if ($c.R -lt 90 -and $c.B -gt 120 -and ($c.B - $c.R) -gt 50) {
+                $blueCount++
             }
         }
     }
-    return $false
+    return ($blueCount -ge 3)
 }
 
 function Find-RetryByOcr {
