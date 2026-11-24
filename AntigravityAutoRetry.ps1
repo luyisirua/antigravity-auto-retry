@@ -1,4 +1,4 @@
-﻿# Antigravity 2.0 Auto-Retry (UIA + Windows Built-in OCR Visual Dual-Engine)
+﻿# Antigravity 2.0 Auto-Retry (Windows Built-in OCR Visual Engine + SendInput)
 Add-Type -AssemblyName System.Windows.Forms
 Add-Type -AssemblyName System.Drawing
 Add-Type -AssemblyName UIAutomationClient
@@ -24,6 +24,22 @@ public class Win32Helper {
         public int Y;
     }
 
+    [StructLayout(LayoutKind.Sequential)]
+    public struct MOUSEINPUT {
+        public int dx;
+        public int dy;
+        public uint mouseData;
+        public uint dwFlags;
+        public uint time;
+        public IntPtr dwExtraInfo;
+    }
+
+    [StructLayout(LayoutKind.Explicit)]
+    public struct INPUT {
+        [FieldOffset(0)] public uint type;
+        [FieldOffset(8)] public MOUSEINPUT mi;
+    }
+
     [DllImport("user32.dll")]
     public static extern bool SetProcessDPIAware();
 
@@ -32,6 +48,12 @@ public class Win32Helper {
 
     [DllImport("user32.dll")]
     public static extern bool IsWindowVisible(IntPtr hWnd);
+
+    [DllImport("user32.dll")]
+    public static extern IntPtr GetForegroundWindow();
+
+    [DllImport("user32.dll")]
+    public static extern bool SetForegroundWindow(IntPtr hWnd);
 
     [DllImport("user32.dll")]
     public static extern bool GetWindowRect(IntPtr hWnd, out RECT lpRect);
@@ -43,10 +65,39 @@ public class Win32Helper {
     public static extern bool SetCursorPos(int X, int Y);
 
     [DllImport("user32.dll")]
-    public static extern void mouse_event(uint dwFlags, int dx, int dy, uint dwData, UIntPtr dwExtraInfo);
+    public static extern int GetSystemMetrics(int nIndex);
+
+    [DllImport("user32.dll", SetLastError = true)]
+    public static extern uint SendInput(uint nInputs, INPUT[] pInputs, int cbSize);
 
     [DllImport("user32.dll")]
     public static extern bool DestroyIcon(IntPtr handle);
+
+    public static uint SendMouseMoveAbs(int x, int y) {
+        int vx = GetSystemMetrics(76); // SM_XVIRTUALSCREEN
+        int vy = GetSystemMetrics(77); // SM_YVIRTUALSCREEN
+        int vw = GetSystemMetrics(78); // SM_CXVIRTUALSCREEN
+        int vh = GetSystemMetrics(79); // SM_CYVIRTUALSCREEN
+        if (vw <= 0) vw = GetSystemMetrics(0);
+        if (vh <= 0) vh = GetSystemMetrics(1);
+
+        int normX = (int)Math.Round((double)(x - vx) * 65535.0 / Math.Max(1, vw - 1));
+        int normY = (int)Math.Round((double)(y - vy) * 65535.0 / Math.Max(1, vh - 1));
+
+        INPUT[] inp = new INPUT[1];
+        inp[0].type = 0; // INPUT_MOUSE
+        inp[0].mi.dx = normX;
+        inp[0].mi.dy = normY;
+        inp[0].mi.dwFlags = 0x0001 | 0x8000 | 0x4000; // MOVE | ABSOLUTE | VIRTUALDESK
+        return SendInput(1, inp, Marshal.SizeOf(typeof(INPUT)));
+    }
+
+    public static uint SendMouseClickFlag(uint flag) {
+        INPUT[] inp = new INPUT[1];
+        inp[0].type = 0; // INPUT_MOUSE
+        inp[0].mi.dwFlags = flag;
+        return SendInput(1, inp, Marshal.SizeOf(typeof(INPUT)));
+    }
 }
 "@
 
@@ -72,7 +123,6 @@ function Await-WinRt {
 $script:ocrEngine = [Windows.Media.Ocr.OcrEngine]::TryCreateFromUserProfileLanguages()
 
 # Configuration
-$TargetLabels = @("retry", "try again", "resume", "try again…", "retry…", "重试", "再试一次")
 $ScanIntervalMs = 3000
 $CooldownMs = 6000
 $LogFile = "C:\Users\KT\Documents\antigravity-auto-retry\retry.log"
@@ -211,7 +261,6 @@ function Is-BlueButtonPixel {
     foreach ($pt in $points) {
         if ($pt[0] -ge 0 -and $pt[0] -lt $Bmp.Width -and $pt[1] -ge 0 -and $pt[1] -lt $Bmp.Height) {
             $c = $Bmp.GetPixel($pt[0], $pt[1])
-            # Require solid dark/medium blue (low R excludes white/gray backgrounds & ClearType fringes)
             if ($c.R -lt 90 -and $c.B -gt 120 -and ($c.B - $c.R) -gt 50) {
                 $blueCount++
             }
@@ -309,18 +358,25 @@ function Find-RetryByOcr {
 }
 
 function Invoke-MouseClickAt {
-    param([int]$X, [int]$Y)
+    param([IntPtr]$Hwnd, [int]$X, [int]$Y)
     $origPt = New-Object Win32Helper+POINT
     [Win32Helper]::GetCursorPos([ref]$origPt) | Out-Null
 
-    [Win32Helper]::SetCursorPos($X, $Y) | Out-Null
-    Start-Sleep -Milliseconds 30
-    [Win32Helper]::mouse_event(0x0002, 0, 0, 0, [UIntPtr]::Zero) # LEFTDOWN
-    Start-Sleep -Milliseconds 30
-    [Win32Helper]::mouse_event(0x0004, 0, 0, 0, [UIntPtr]::Zero) # LEFTUP
-    Start-Sleep -Milliseconds 30
+    # Ensure target Antigravity window is foreground so Electron processes the click
+    if ([Win32Helper]::GetForegroundWindow() -ne $Hwnd) {
+        [Win32Helper]::SetForegroundWindow($Hwnd) | Out-Null
+        Start-Sleep -Milliseconds 80
+    }
+
+    $mSent = [Win32Helper]::SendMouseMoveAbs($X, $Y)
+    Start-Sleep -Milliseconds 100
+    $dSent = [Win32Helper]::SendMouseClickFlag(0x0002) # LEFTDOWN
+    Start-Sleep -Milliseconds 60
+    $uSent = [Win32Helper]::SendMouseClickFlag(0x0004) # LEFTUP
+    Start-Sleep -Milliseconds 60
 
     [Win32Helper]::SetCursorPos($origPt.X, $origPt.Y) | Out-Null
+    return "move=$mSent,down=$dSent,up=$uSent"
 }
 
 # Diagnostic test
@@ -372,11 +428,11 @@ $timer.Add_Tick({
         foreach ($w in $wins) {
             $hit = Find-RetryByOcr -Hwnd $w.Handle
             if ($hit) {
-                Invoke-MouseClickAt -X $hit.ScreenX -Y $hit.ScreenY
+                $sendStat = Invoke-MouseClickAt -Hwnd $w.Handle -X $hit.ScreenX -Y $hit.ScreenY
                 $script:lastClickTime = $now
                 $script:retryCount++
                 Update-TrayUI
-                Write-Log "Visual OCR clicked '$($hit.Label)' at ($($hit.ScreenX), $($hit.ScreenY)) (total: $($script:retryCount))"
+                Write-Log "Visual OCR clicked '$($hit.Label)' at ($($hit.ScreenX), $($hit.ScreenY)) [$sendStat] (total: $($script:retryCount))"
                 $notifyIcon.ShowBalloonTip(2000, "Antigravity Auto-Retry", "已自动点击 $($hit.Label) (第 $($script:retryCount) 次)", [System.Windows.Forms.ToolTipIcon]::Info)
                 return
             }
