@@ -1,4 +1,4 @@
-﻿# Antigravity 2.0 Auto-Retry (Windows Built-in OCR Visual Engine + SendInput)
+﻿# Antigravity 2.0 Auto-Retry (Windows Built-in OCR Visual Engine + Idle-Safe Click)
 Add-Type -AssemblyName System.Windows.Forms
 Add-Type -AssemblyName System.Drawing
 Add-Type -AssemblyName UIAutomationClient
@@ -40,6 +40,12 @@ public class Win32Helper {
         [FieldOffset(8)] public MOUSEINPUT mi;
     }
 
+    [StructLayout(LayoutKind.Sequential)]
+    public struct LASTINPUTINFO {
+        public uint cbSize;
+        public uint dwTime;
+    }
+
     [DllImport("user32.dll")]
     public static extern bool SetProcessDPIAware();
 
@@ -64,32 +70,20 @@ public class Win32Helper {
     [DllImport("user32.dll")]
     public static extern bool SetCursorPos(int X, int Y);
 
-    [DllImport("user32.dll")]
-    public static extern int GetSystemMetrics(int nIndex);
-
     [DllImport("user32.dll", SetLastError = true)]
     public static extern uint SendInput(uint nInputs, INPUT[] pInputs, int cbSize);
 
     [DllImport("user32.dll")]
+    public static extern bool GetLastInputInfo(ref LASTINPUTINFO plii);
+
+    [DllImport("user32.dll")]
     public static extern bool DestroyIcon(IntPtr handle);
 
-    public static uint SendMouseMoveAbs(int x, int y) {
-        int vx = GetSystemMetrics(76); // SM_XVIRTUALSCREEN
-        int vy = GetSystemMetrics(77); // SM_YVIRTUALSCREEN
-        int vw = GetSystemMetrics(78); // SM_CXVIRTUALSCREEN
-        int vh = GetSystemMetrics(79); // SM_CYVIRTUALSCREEN
-        if (vw <= 0) vw = GetSystemMetrics(0);
-        if (vh <= 0) vh = GetSystemMetrics(1);
-
-        int normX = (int)Math.Round((double)(x - vx) * 65535.0 / Math.Max(1, vw - 1));
-        int normY = (int)Math.Round((double)(y - vy) * 65535.0 / Math.Max(1, vh - 1));
-
-        INPUT[] inp = new INPUT[1];
-        inp[0].type = 0; // INPUT_MOUSE
-        inp[0].mi.dx = normX;
-        inp[0].mi.dy = normY;
-        inp[0].mi.dwFlags = 0x0001 | 0x8000 | 0x4000; // MOVE | ABSOLUTE | VIRTUALDESK
-        return SendInput(1, inp, Marshal.SizeOf(typeof(INPUT)));
+    public static uint GetIdleTimeMs() {
+        LASTINPUTINFO lii = new LASTINPUTINFO();
+        lii.cbSize = (uint)Marshal.SizeOf(typeof(LASTINPUTINFO));
+        if (!GetLastInputInfo(ref lii)) return 0;
+        return unchecked((uint)Environment.TickCount - lii.dwTime);
     }
 
     public static uint SendMouseClickFlag(uint flag) {
@@ -125,9 +119,11 @@ $script:ocrEngine = [Windows.Media.Ocr.OcrEngine]::TryCreateFromUserProfileLangu
 # Configuration
 $ScanIntervalMs = 3000
 $CooldownMs = 6000
+$IdleThresholdMs = 3000
 $LogFile = "C:\Users\KT\Documents\antigravity-auto-retry\retry.log"
 
 $script:enabled = $true
+$script:idleOnly = $true
 $script:retryCount = 0
 $script:lastClickTime = [DateTime]::MinValue
 
@@ -175,6 +171,8 @@ $menuStatus = New-Object System.Windows.Forms.ToolStripMenuItem
 $menuStatus.Enabled = $false
 
 $menuToggle = New-Object System.Windows.Forms.ToolStripMenuItem
+$menuIdleOnly = New-Object System.Windows.Forms.ToolStripMenuItem("仅空闲 3 秒后点击 (防打扰)")
+$menuIdleOnly.Checked = $true
 $menuDiagOcr = New-Object System.Windows.Forms.ToolStripMenuItem("测试视觉识别 (OCR)")
 $menuLog = New-Object System.Windows.Forms.ToolStripMenuItem("打开运行日志")
 $menuExit = New-Object System.Windows.Forms.ToolStripMenuItem("退出")
@@ -182,6 +180,7 @@ $menuExit = New-Object System.Windows.Forms.ToolStripMenuItem("退出")
 $contextMenu.Items.Add($menuStatus) | Out-Null
 $contextMenu.Items.Add((New-Object System.Windows.Forms.ToolStripSeparator)) | Out-Null
 $contextMenu.Items.Add($menuToggle) | Out-Null
+$contextMenu.Items.Add($menuIdleOnly) | Out-Null
 $contextMenu.Items.Add($menuDiagOcr) | Out-Null
 $contextMenu.Items.Add($menuLog) | Out-Null
 $contextMenu.Items.Add((New-Object System.Windows.Forms.ToolStripSeparator)) | Out-Null
@@ -210,6 +209,11 @@ $toggleAction = {
 }
 
 $menuToggle.Add_Click($toggleAction)
+$menuIdleOnly.Add_Click({
+    $script:idleOnly = -not $script:idleOnly
+    $menuIdleOnly.Checked = $script:idleOnly
+    Write-Log "Idle-only mode: $($script:idleOnly)"
+})
 $notifyIcon.Add_MouseClick({
     param($sender, $e)
     if ($e.Button -eq [System.Windows.Forms.MouseButtons]::Left) {
@@ -361,24 +365,26 @@ function Invoke-MouseClickAt {
     param([IntPtr]$Hwnd, [int]$X, [int]$Y)
     $origPt = New-Object Win32Helper+POINT
     [Win32Helper]::GetCursorPos([ref]$origPt) | Out-Null
+    $prevHwnd = [Win32Helper]::GetForegroundWindow()
 
-    if ([Win32Helper]::GetForegroundWindow() -ne $Hwnd) {
+    if ($prevHwnd -ne $Hwnd) {
         [Win32Helper]::SetForegroundWindow($Hwnd) | Out-Null
-        Start-Sleep -Milliseconds 100
+        Start-Sleep -Milliseconds 30
     }
 
     $mSent = [Win32Helper]::SetCursorPos($X, $Y)
-    Start-Sleep -Milliseconds 120
-    $curPt = New-Object Win32Helper+POINT
-    [Win32Helper]::GetCursorPos([ref]$curPt) | Out-Null
-
+    Start-Sleep -Milliseconds 25
     $dSent = [Win32Helper]::SendMouseClickFlag(0x0002) # LEFTDOWN
-    Start-Sleep -Milliseconds 80
+    Start-Sleep -Milliseconds 25
     $uSent = [Win32Helper]::SendMouseClickFlag(0x0004) # LEFTUP
-    Start-Sleep -Milliseconds 300
+    Start-Sleep -Milliseconds 20
 
+    # Restore cursor and previous foreground window immediately
     [Win32Helper]::SetCursorPos($origPt.X, $origPt.Y) | Out-Null
-    return "move=$mSent,down=$dSent,up=$uSent,actual=($($curPt.X),$($curPt.Y))"
+    if ($prevHwnd -ne [IntPtr]::Zero -and $prevHwnd -ne $Hwnd) {
+        [Win32Helper]::SetForegroundWindow($prevHwnd) | Out-Null
+    }
+    return "move=$mSent,down=$dSent,up=$uSent"
 }
 
 # Diagnostic test
@@ -422,6 +428,9 @@ $timer.Add_Tick({
     if (-not $script:enabled) { return }
     $now = Get-Date
     if (($now - $script:lastClickTime).TotalMilliseconds -lt $CooldownMs) { return }
+
+    # Avoid stealing mouse/focus while user is actively typing or moving the mouse
+    if ($script:idleOnly -and ([Win32Helper]::GetIdleTimeMs() -lt $IdleThresholdMs)) { return }
 
     try {
         $wins = @(Get-AntigravityWindowHandles)
